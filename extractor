@@ -1,0 +1,442 @@
+import subprocess
+import os
+import json
+import re
+import time
+import requests
+import html
+from urllib.parse import urlparse
+
+# ============================================================
+# EXTRACTOR VIMEOS (CORREGIDO - SOLO .net)
+# ============================================================
+
+def get_direct_url_vimeos(url):
+    """Extrae la URL m3u8 de Vimeos - SOLO .net, excluye .zip"""
+    try:
+        if '?' in url:
+            url = url.split('?', 1)[0]
+
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+        res = requests.get(url, headers=headers, timeout=30)
+
+        scripts = re.findall(r'<script[^>]*>(.*?)</script>', res.text, re.DOTALL | re.IGNORECASE)
+        packed_script = ""
+        for s in scripts:
+            if "eval(function(p,a,c,k,e,d)" in s and "jw" in s:
+                packed_script = s
+                break
+
+        if not packed_script:
+            return None
+
+        match = re.search(r"function\(p,a,c,k,e,d\)\{.*?\}\(('.+?'),\s*(\d+),\s*(\d+),\s*('.+?')\.split\('\|'\)", packed_script, re.DOTALL)
+
+        if not match:
+            return None
+
+        p, a, c, k_str = match.group(1).strip("'"), int(match.group(2)), int(match.group(3)), match.group(4).strip("'").split('|')
+
+        def baseN(num, b, numerals="0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"):
+            return ((num == 0) and numerals[0]) or (baseN(num // b, b, numerals).lstrip(numerals[0]) + numerals[num % b])
+
+        while c > 0:
+            c -= 1
+            if k_str[c]:
+                word = baseN(c, a)
+                p = re.sub(r'\b' + re.escape(word) + r'\b', k_str[c], p)
+
+        # Extraer TODAS las URLs m3u8
+        todas_urls = re.findall(r'(https?://[^\s"\'<>]+\.m3u8[^\s"\'<>]*)', p)
+        
+        # FILTRAR: SOLO las que tienen .net (excluir .zip, .com, etc.)
+        for u in todas_urls:
+            if '.net' in u:
+                print(f"   ✅ URL .net encontrada")
+                return u
+            else:
+                print(f"   ⚠️ Excluida (no .net): {u[:60]}...")
+        
+        return None
+
+    except Exception as e:
+        print(f"   ⚠️ Error Vimeos: {e}")
+        return None
+
+
+# ============================================================
+# NUEVO EXTRACTOR OK.RU (DIRECTO DESDE HTML - MÁXIMA CALIDAD)
+# ============================================================
+
+def normalizar_okru(valor):
+    if not isinstance(valor, str):
+        return valor
+    valor = html.unescape(valor)
+    valor = valor.replace(r"\/", "/")
+    valor = valor.replace(r"\u0026", "&")
+    valor = valor.replace(r"\u003A", ":")
+    valor = valor.replace(r"\u003F", "?")
+    valor = valor.replace(r"\u003D", "=")
+    return valor
+
+def extraer_objeto_json(texto, inicio):
+    """Helper para extraer un objeto JSON balanceado desde una posición"""
+    if inicio < 0 or inicio >= len(texto):
+        return None
+    if texto[inicio] != "{":
+        return None
+
+    profundidad = 0
+    dentro_string = False
+    escape = False
+
+    for i in range(inicio, len(texto)):
+        c = texto[i]
+        if dentro_string:
+            if escape:
+                escape = False
+            elif c == "\\":
+                escape = True
+            elif c == '"':
+                dentro_string = False
+            continue
+        
+        if c == '"':
+            dentro_string = True
+        elif c == "{":
+            profundidad += 1
+        elif c == "}":
+            profundidad -= 1
+            if profundidad == 0:
+                return texto[inicio:i + 1]
+    return None
+
+def get_direct_url_okru_html(url):
+    """
+    Extrae la URL de MAYOR CALIDAD directamente del HTML de OK.ru
+    Sin usar yt-dlp. Prioriza Ultra (4K) > QuadHD > FullHD.
+    """
+    try:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+            'Referer': 'https://ok.ru/'
+        }
+        
+        print(f"   🔍 Analizando HTML de OK.ru...")
+        resp = requests.get(url, headers=headers, timeout=30)
+        
+        if resp.status_code != 200:
+            print(f"   ❌ Error HTTP {resp.status_code}")
+            return None
+
+        html_text = normalizar_okru(resp.text)
+        
+        # Buscar el bloque de metadata
+        patrones_metadata = [r'"metadata"\s*:\s*', r'\\?"metadata\\?"\s*:\s*']
+        pos_metadata = -1
+        
+        for patron in patrones_metadata:
+            match = re.search(patron, html_text, re.I)
+            if match:
+                pos_metadata = match.end()
+                break
+                
+        if pos_metadata == -1:
+            print(f"   ❌ No se encontró bloque metadata")
+            return None
+
+        # Extraer el objeto JSON completo
+        inicio_json = html_text.find("{", pos_metadata)
+        if inicio_json == -1:
+            return None
+            
+        json_str = extraer_objeto_json(html_text, inicio_json)
+        if not json_str:
+            return None
+
+        data = json.loads(json_str)
+        
+        videos = data.get("videos", [])
+        if not videos:
+            print(f"   ❌ No se encontraron variantes de video")
+            return None
+
+        # Lógica de selección de MEJOR calidad
+        mejor_video = None
+        max_score = -1
+
+        for v in videos:
+            if not isinstance(v, dict): continue
+            url_vid = v.get("url")
+            if not url_vid or not isinstance(url_vid, str): continue
+            
+            # Normalizar URL
+            url_vid = normalizar_okru(url_vid).strip()
+            if not url_vid.startswith(("http://", "https://")): continue
+
+            # Calcular score
+            name = str(v.get("name", "")).lower()
+            tipo = v.get("type")
+            
+            score = 0
+            # Prioridad por TYPE numérico (7=Ultra, 6=Quad, 5=Full...)
+            if tipo is not None:
+                try: score = int(tipo) * 1000000
+                except: pass
+            
+            # Respaldo por nombre
+            if "ultra" in name: score = max(score, 7000000)
+            elif "quadhd" in name: score = max(score, 6000000)
+            elif "fullhd" in name: score = max(score, 5000000)
+            elif "hd" in name: score = max(score, 4000000)
+            
+            if score > max_score:
+                max_score = score
+                mejor_video = url_vid
+
+        if mejor_video:
+            print(f"   ✅ URL Máxima Calidad obtenida (Score: {max_score})")
+            return mejor_video
+        else:
+            print(f"   ❌ No se pudo determinar la mejor URL")
+            return None
+
+    except Exception as e:
+        print(f"   ⚠️ Error extrayendo OK.ru HTML: {e}")
+        return None
+
+
+# ============================================================
+# EXTRACTOR YT-DLP (PARA OTRAS PLATAFORMAS)
+# ============================================================
+
+def get_direct_url_ytdlp(video_url):
+    """
+    Extrae la URL directa del video usando yt-dlp
+    Soporta: Videa.hu, TokyoVideo, VKVideo (OK.ru ya no usa esto)
+    """
+    try:
+        video_url = video_url.strip()
+        if video_url.startswith('//'):
+            video_url = 'https:' + video_url
+        elif not video_url.startswith(('http://', 'https://')):
+            video_url = 'https://' + video_url
+        
+        plataforma = None
+        # NOTA: ok.ru removido de aquí porque tiene su propia función
+        if 'vkvideo.ru' in video_url or 'vk.com' in video_url:
+            plataforma = 'vkvideo.ru'
+        elif 'videa.hu' in video_url:
+            plataforma = 'videa.hu'
+        elif 'tokyvideo.com' in video_url:
+            plataforma = 'tokyvideo.com'
+        
+        if not plataforma:
+            print(f"   ⚠️ Plataforma no soportada por yt-dlp en este contexto: {video_url[:50]}...")
+            return None
+        
+        print(f"   🔍 Usando yt-dlp para: {plataforma}")
+        
+        cmd = ['yt-dlp', '-g', video_url]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
+        
+        if result.returncode == 0 and result.stdout.strip():
+            url_directa = result.stdout.strip()
+            print(f"   ✅ URL directa obtenida vía yt-dlp")
+            return url_directa
+        
+        print(f"   ❌ Falló yt-dlp para {plataforma}")
+        return None
+        
+    except subprocess.TimeoutExpired:
+        print(f"   ⏰ Timeout al extraer URL")
+        return None
+    except Exception as e:
+        print(f"   ⚠️ Error yt-dlp: {e}")
+        return None
+
+
+# ============================================================
+# EXTRACTOR UNIFICADO (ACTUALIZADO)
+# ============================================================
+
+def get_direct_url(video_url):
+    """Detecta plataforma y usa el método correcto"""
+    if not video_url:
+        return None
+
+    video_url = video_url.strip()
+    if video_url.startswith('//'):
+        video_url = 'https:' + video_url
+    elif not video_url.startswith(('http://', 'https://')):
+        video_url = 'https://' + video_url
+
+    url_lower = video_url.lower()
+
+    # VIMEO → TU CÓDIGO (CORREGIDO - SOLO .net)
+    if 'vimeos.net' in url_lower:
+        print(f"   🔍 Vimeos detectado")
+        url_directa = get_direct_url_vimeos(video_url)
+        if url_directa:
+            print(f"   ✅ m3u8 .net obtenido")
+            return url_directa
+        print(f"   ⚠️ Falló Vimeos, intentando yt-dlp...")
+        return get_direct_url_ytdlp(video_url)
+
+    # OK.ru → NUEVO MÉTODO HTML DIRECTO (RÁPIDO Y 4K)
+    elif 'ok.ru' in url_lower:
+        return get_direct_url_okru_html(video_url)
+
+    # OTRAS PLATAFORMAS → YT-DLP
+    elif any(x in url_lower for x in ['vkvideo.ru', 'vk.com', 'videa.hu', 'tokyvideo.com']):
+        return get_direct_url_ytdlp(video_url)
+
+    else:
+        print(f"   ⚠️ Plataforma no soportada: {video_url[:50]}...")
+        return None
+
+
+# ============================================================
+# PROCESAR PELÍCULA (EL DE GITHUB)
+# ============================================================
+
+def procesar_pelicula(pelicula, idx, total):
+    """Procesa una película individual"""
+    titulo = pelicula.get('TITULO', f'Película {idx+1}')
+    urls = pelicula.get('URLS', pelicula.get('URLS_OKRU', []))
+    id_video = pelicula.get('ID_VIDEO', pelicula.get('ID_OKRU'))
+    categoria = pelicula.get('CATEGORIA', 'GENERAL').upper()
+    plataforma = pelicula.get('PLATAFORMA', 'desconocida')
+    
+    if not urls:
+        print(f"⚠️ [{idx+1}/{total}] {titulo} - Sin URLs")
+        return pelicula
+    
+    print(f"\n🔄 [{idx+1}/{total}] [{categoria}] {titulo} - ID: {id_video} - {plataforma}")
+    
+    urls_directas = []
+    for i, url_video in enumerate(urls, 1):
+        print(f"   📎 URL {i}/{len(urls)}: {url_video[:60]}...")
+        url_directa = get_direct_url(url_video)
+        if url_directa:
+            urls_directas.append(url_directa)
+            print(f"      ✅ URL directa obtenida")
+        else:
+            print(f"      ❌ Falló la extracción")
+        time.sleep(0.3)
+    
+    if urls_directas:
+        pelicula['URLS_DIRECTAS'] = urls_directas
+        pelicula['URL_DIRECTA'] = urls_directas[0]
+        print(f"   ✅ {len(urls_directas)} URL(s) directa(s)")
+    else:
+        pelicula['URLS_DIRECTAS'] = []
+        pelicula['URL_DIRECTA'] = ""
+        print(f"   ❌ Falló la extracción de todas las URLs")
+    
+    return pelicula
+
+
+# ============================================================
+# MAIN (EL DE GITHUB)
+# ============================================================
+
+def main():
+    print("="*70)
+    print("🎬 EXTRACTOR MULTI-PLATAFORMA UNIFICADO")
+    print("   Soporta: OK.ru (HTML Direct) | Videa.hu | TokyoVideo | VKVideo | Vimeos (.net)")
+    print("   🔒 urls.txt es la BASE DE DATOS - NUNCA se limpia")
+    print("="*70)
+    
+    if not os.path.exists('urls.txt'):
+        print("📝 Creando urls.txt vacío...")
+        with open('urls.txt', 'w', encoding='utf-8') as f:
+            f.write("[]")
+        print("ℹ️ urls.txt creado.")
+        return
+    
+    with open('urls.txt', 'r', encoding='utf-8') as f:
+        contenido = f.read().strip()
+    
+    if not contenido or contenido == "[]":
+        print("ℹ️ urls.txt está vacío.")
+        return
+    
+    try:
+        peliculas = json.loads(contenido)
+    except json.JSONDecodeError as e:
+        print(f"❌ urls.txt no contiene JSON válido: {e}")
+        return
+    
+    print(f"📥 {len(peliculas)} películas encontradas en urls.txt")
+    
+    os.makedirs('peliculas', exist_ok=True)
+    
+    peliculas_procesadas = 0
+    peliculas_con_error = 0
+    
+    for i, pelicula in enumerate(peliculas):
+        pelicula_procesada = procesar_pelicula(pelicula, i, len(peliculas))
+        peliculas[i] = pelicula_procesada
+        
+        with open('urls.txt', 'w', encoding='utf-8') as f:
+            json.dump(peliculas, f, indent=2, ensure_ascii=False)
+        
+        if pelicula_procesada.get('URL_DIRECTA'):
+            peliculas_procesadas += 1
+        else:
+            peliculas_con_error += 1
+        
+        time.sleep(0.3)
+    
+    # ORGANIZAR POR CATEGORÍA
+    categorias_dict = {}
+    for pelicula in peliculas:
+        categoria = pelicula.get('CATEGORIA', 'GENERAL').upper()
+        if categoria not in categorias_dict:
+            categorias_dict[categoria] = []
+        categorias_dict[categoria].append(pelicula)
+    
+    for categoria, pelis in categorias_dict.items():
+        json_path = os.path.join('peliculas', f'{categoria}.json')
+        data = []
+        if os.path.exists(json_path):
+            try:
+                with open(json_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+            except:
+                data = []
+        
+        for pelicula in pelis:
+            id_busqueda = pelicula.get('ID_VIDEO') or pelicula.get('ID_OKRU') or pelicula.get('TMDB_ID')
+            encontrado = False
+            for j, item in enumerate(data):
+                item_id = item.get('ID_VIDEO') or item.get('ID_OKRU') or item.get('TMDB_ID')
+                if item_id == id_busqueda or item.get('TMDB_ID') == pelicula.get('TMDB_ID'):
+                    data[j] = pelicula
+                    encontrado = True
+                    break
+            if not encontrado:
+                data.append(pelicula)
+        
+        with open(json_path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        
+        print(f"   📁 {categoria}.json → {len(data)} películas")
+    
+    with open('category_list.json', 'w', encoding='utf-8') as f:
+        json.dump(list(categorias_dict.keys()), f, indent=2, ensure_ascii=False)
+    
+    print(f"\n🔒 urls.txt conserva {len(peliculas)} películas - BASE DE DATOS PRINCIPAL")
+    
+    print("\n" + "="*70)
+    print(f"🎉 Proceso completado")
+    print(f"✅ {peliculas_procesadas} películas con URL directa")
+    print(f"⚠️ {peliculas_con_error} películas sin URL directa")
+    print(f"📂 Categorías creadas: {list(categorias_dict.keys())}")
+    print("🔒 urls.txt NO fue eliminado")
+    print("="*70)
+
+
+if __name__ == "__main__":
+    main()
