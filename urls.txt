@@ -20,5 +20,27 @@
       "https://ok.ru/video/15348597132014"
     ],
     "METODO": "MANUAL"
+  },
+  {
+    "CATEGORIA": "DISNEY_PIXAR",
+    "TMDB_ID": 260513,
+    "ID_VIDEO": null,
+    "PLATAFORMA": "tokyvideo.com",
+    "TITULO": "Los increíbles 2",
+    "FECHA": "2018-06-14",
+    "PORTADA": "https://image.tmdb.org/t/p/w500/bJjc0217DuipdwJ0wyi3I4j6soR.jpg",
+    "BACKDROP": "https://image.tmdb.org/t/p/w500/mabuNsGJgRuCTuGqjFkWe1xdu19.jpg",
+    "GENERO": "Acción, Aventura, Animación, Familia",
+    "RATING": 7.453,
+    "DURACION": 118,
+    "FRASE_PROMOCIONAL": "De vuelta al trabajo.",
+    "SINOPSIS": "La familia de Los Increíbles emprende una nueva misión que implica un cambio en los roles familiares: Bob Parr (Mr. Increíble) debe administrar la casa mientras su esposa Helen (Elastigirl) sale a salvar el mundo.",
+    "ACTORES": "  • Craig T. Nelson (Bob Parr / Mr. Incredible (voice))\n  • Holly Hunter (Helen Parr / Elastigirl (voice))\n  • Sarah Vowell (Violet Parr (voice))\n  • Huck Milner (Dashiell 'Dash' Parr (voice))\n  • Catherine Keener (Evelyn Deavor (voice))",
+    "DIRECTOR": "Brad Bird",
+    "TRAILER": "No disponible",
+    "URLS": [
+      "https://www.tokyvideo.com/es/video/gigilos-increibles-2-2018-latino-3"
+    ],
+    "METODO": "MANUAL"
   }
 ]
