@@ -1,0 +1,24 @@
+[
+  {
+    "CATEGORIA": "DISNEY_PIXAR",
+    "TMDB_ID": 1084244,
+    "ID_VIDEO": null,
+    "PLATAFORMA": "ok.ru",
+    "TITULO": "Toy Story 5",
+    "FECHA": "2026-06-17",
+    "PORTADA": "https://image.tmdb.org/t/p/w500/zkQmhKTszD48vEcjIfwAlqLnGSr.jpg",
+    "BACKDROP": "https://image.tmdb.org/t/p/w500/8sSKdEmlmqF4kJUd28SqthXC4yZ.jpg",
+    "GENERO": "Animación, Familia, Comedia, Aventura",
+    "RATING": 8.3,
+    "DURACION": 102,
+    "FRASE_PROMOCIONAL": "Se activó.",
+    "SINOPSIS": "Cuando Woody logra regresar con Buzz, Jessie y el resto de la pandilla, descubren una nueva amenaza: la tecnología. Un nuevo tiempo de juego para los niños.",
+    "ACTORES": "  • Joan Cusack (Jessie (voice))\n  • Tom Hanks (Woody (voice))\n  • Tim Allen (Buzz Lightyear (voice))\n  • Conan O'Brien (Smarty Pants (voice))\n  • Scarlett Spears (Bonnie (voice))",
+    "DIRECTOR": "Andrew Stanton",
+    "TRAILER": "https://youtube.com/watch?v=DW8GC9SQ9Xw",
+    "URLS": [
+      "https://ok.ru/video/15348597132014"
+    ],
+    "METODO": "MANUAL"
+  }
+]
